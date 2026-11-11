@@ -1,34 +1,36 @@
-# Clusterização K-Means — Boston Housing
+# Clusterização KMeans — Boston Housing
 
-Avaliação do 2º bimestre: agrupamento de residências da base Boston Housing com K-Means.
+Avaliação do 2º bimestre: agrupamento de residências da base Boston Housing (`HousingData.csv`) com KMeans.
 
 ## Estrutura
 
 ```
-data/BostonHousing.csv   # base de dados
-treinamento.py           # módulo de treinamento
-inferencia.py            # módulo de inferência
-modelo/                  # modelo salvo + gráfico do cotovelo
+data/HousingData.csv   # base da aula
+treinamento.py         # módulo de treinamento
+inferencia.py          # módulo de inferência
+modelo/                # normalizador, colunas, modelo KMeans e gráfico do cotovelo
 requirements.txt
 ```
 
 ## Como executar
 
 ```bash
+python -m venv .venv
+.venv\Scripts\Activate
 pip install -r requirements.txt
-python treinamento.py   # treina e salva o modelo em modelo/
+python treinamento.py   # treina e salva os modelos em modelo/
 python inferencia.py    # classifica uma nova residência
 ```
 
 ## Decisões
 
-**Normalização**
-- Quantitativas (`crim, zn, indus, nox, rm, age, dis, tax, ptratio, b, lstat`): `MinMaxScaler` (0 a 1).
-- Categóricas: `chas` (binária) e `rad` (índice discreto de acesso a rodovias) com `OneHotEncoder`, para que o K-Means não trate as classes como distâncias numéricas.
-- `medv` (preço) é o alvo original da base e ficou fora da clusterização, pois uma nova residência não teria esse valor.
-
-**Número de grupos**: método do cotovelo sobre a inércia (soma das distâncias² aos centroides) para k = 1..10. O k ótimo é o ponto da curva com maior distância à reta que liga o primeiro e o último ponto. O gráfico fica em `modelo/cotovelo.png`.
-
-**Balanceamento**: não aplicado (conforme enunciado).
-
-**Desnormalização do centroide**: parte quantitativa via `inverse_transform` do `MinMaxScaler`; parte categórica pela categoria de maior peso no one-hot.
+- **Dados faltantes (NA)**: preenchidos com a mediana (quantitativos) e a moda (categóricos).
+- **Normalização**:
+  - Quantitativos (`CRIM, ZN, INDUS, NOX, RM, AGE, DIS, TAX, PTRATIO, B, LSTAT`): `MinMaxScaler`.
+  - Categóricos (`CHAS`, que é binário, e `RAD`, um índice discreto de acesso a rodovias): `pd.get_dummies`.
+- **MEDV** (preço) é o alvo original da base. Ficou fora da clusterização, porque uma nova residência não teria esse valor.
+- **Balanceamento**: não aplicado, conforme o enunciado.
+- **Número de clusters**: método do cotovelo sobre as distorções (média das distâncias euclidianas ao centróide mais próximo), testando k de 1 a 20. O k ótimo é o ponto de maior distância à reta entre o primeiro e o último ponto. Resultado: **k = 4** (`modelo/cotovelo.png`).
+- **Desnormalização do centróide**:
+  - Quantitativos: `inverse_transform`.
+  - Categóricos: a categoria de maior peso entre os dummies, já que o centróide é uma média com valores entre 0 e 1.

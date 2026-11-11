@@ -1,82 +1,60 @@
-"""
-Módulo de inferência — classifica uma nova residência em um grupo.
+#Módulo de inferência - receber uma nova residência e determinar o seu cluster
+from pickle import load
 
-Etapas:
-1. Recebe os dados de uma nova residência (via terminal).
-2. Normaliza com o mesmo normalizador usado no treinamento.
-3. Infere o grupo com o modelo K-Means salvo.
-4. Exibe o centroide do grupo inferido desnormalizado.
-"""
-import joblib
-import numpy as np
 import pandas as pd
 
-ARQ_MODELO = "modelo/modelo_kmeans.pkl"
+dados_cat_rotulos = ['CHAS', 'RAD']
 
-DESCRICOES = {
-    "crim": "Taxa de criminalidade per capita",
-    "zn": "% de terrenos residenciais > 25.000 pés²",
-    "indus": "% de área comercial não varejista",
-    "chas": "Margeia o rio Charles (1 = sim, 0 = não)",
-    "nox": "Concentração de óxidos nítricos (ppm)",
-    "rm": "Nº médio de cômodos",
-    "age": "% de imóveis construídos antes de 1940",
-    "dis": "Distância ponderada a centros de emprego",
-    "rad": "Índice de acesso a rodovias (1-8 ou 24)",
-    "tax": "Imposto predial por US$ 10.000",
-    "ptratio": "Razão aluno/professor",
-    "b": "Índice B (proporção populacional)",
-    "lstat": "% da população de baixa renda",
+#Receber os dados de uma nova residência
+nova_residencia = {
+    'CRIM': float(input('CRIM - taxa de criminalidade per capita: ')),
+    'ZN': float(input('ZN - % de terrenos residenciais > 25.000 pés²: ')),
+    'INDUS': float(input('INDUS - % de área comercial não varejista: ')),
+    'CHAS': int(input('CHAS - margeia o rio Charles (1 = sim, 0 = não): ')),
+    'NOX': float(input('NOX - concentração de óxidos nítricos: ')),
+    'RM': float(input('RM - nº médio de cômodos: ')),
+    'AGE': float(input('AGE - % de imóveis construídos antes de 1940: ')),
+    'DIS': float(input('DIS - distância a centros de emprego: ')),
+    'RAD': int(input('RAD - índice de acesso a rodovias (1-8 ou 24): ')),
+    'TAX': float(input('TAX - imposto predial: ')),
+    'PTRATIO': float(input('PTRATIO - razão aluno/professor: ')),
+    'B': float(input('B - índice B: ')),
+    'LSTAT': float(input('LSTAT - % da população de baixa renda: ')),
 }
+nova_residencia = pd.DataFrame([nova_residencia])
 
+#Carregar os modelos
+modelo_normalizador = load(open('modelo/normalizador.model', 'rb'))
+colunas = load(open('modelo/colunas.model', 'rb'))
+housing_cluster = load(open('modelo/housing_cluster.model', 'rb'))
 
-def receber_dados(colunas):
-    print("Informe os dados da nova residência:")
-    dados = {}
-    for c in colunas:
-        while True:
-            try:
-                dados[c] = float(input(f"  {c} - {DESCRICOES[c]}: ").replace(",", "."))
-                break
-            except ValueError:
-                print("    Valor inválido, digite um número.")
-    return pd.DataFrame([dados])
+#Normalizar os dados da nova residência
+nova_num = nova_residencia.drop(columns=dados_cat_rotulos)
+nova_num_normalizada = pd.DataFrame(modelo_normalizador.transform(nova_num), columns=nova_num.columns)
+nova_cat_normalizada = pd.get_dummies(nova_residencia[dados_cat_rotulos].astype(str), prefix=dados_cat_rotulos, dtype=int)
+nova_normalizada = nova_num_normalizada.join(nova_cat_normalizada)
+#Garantir as mesmas colunas do treino (categorias ausentes = 0)
+nova_normalizada = nova_normalizada.reindex(columns=colunas, fill_value=0)
 
+#Inferir o cluster
+cluster = housing_cluster.predict(nova_normalizada)[0]
+print(f'\nA nova residência pertence ao cluster {cluster}')
 
-def desnormalizar_centroide(centroide, normalizador, quantitativas, categoricas):
-    n = len(quantitativas)
-    # Parte quantitativa: inverso do MinMaxScaler
-    quant = normalizador.named_transformers_["quant"].inverse_transform(centroide[:n].reshape(1, -1))[0]
-    resultado = dict(zip(quantitativas, quant))
-    # Parte categórica: categoria de maior peso no one-hot de cada variável
-    encoder = normalizador.named_transformers_["cat"]
-    pos = n
-    for col, cats in zip(categoricas, encoder.categories_):
-        bloco = centroide[pos:pos + len(cats)]
-        resultado[col] = cats[int(np.argmax(bloco))]
-        pos += len(cats)
-    return resultado
+#Desnormalizar o centróide do cluster inferido
+centroide = pd.DataFrame([housing_cluster.cluster_centers_[cluster]], columns=colunas)
 
+#Numéricos: inverse_transform
+colunas_num = list(modelo_normalizador.feature_names_in_)
+centroide_num = pd.DataFrame(modelo_normalizador.inverse_transform(centroide[colunas_num]), columns=colunas_num)
 
-def main():
-    pacote = joblib.load(ARQ_MODELO)
-    normalizador = pacote["normalizador"]
-    kmeans = pacote["kmeans"]
-    quant, cat = pacote["quantitativas"], pacote["categoricas"]
-    colunas = quant + cat
+#Categóricos: categoria de maior peso no centróide
+#(o centróide é uma média, então os dummies têm valores entre 0 e 1)
+centroide_cat = {}
+for rotulo in dados_cat_rotulos:
+    dummies = [c for c in colunas if c.startswith(rotulo + '_')]
+    centroide_cat[rotulo] = int(centroide[dummies].iloc[0].idxmax().split('_')[1])
 
-    nova = receber_dados([c for c in DESCRICOES if c in colunas])[colunas]
-    X = normalizador.transform(nova)
-    grupo = int(kmeans.predict(X)[0])
+centroide_desnormalizado = centroide_num.assign(**centroide_cat)[nova_residencia.columns]
 
-    centroide = desnormalizar_centroide(kmeans.cluster_centers_[grupo], normalizador, quant, cat)
-
-    print(f"\nA nova residência pertence ao GRUPO {grupo}.")
-    print("\nCentroide do grupo (valores desnormalizados):")
-    print(f"{'Atributo':<9} {'Nova residência':>16} {'Centroide':>12}")
-    for c in DESCRICOES:
-        print(f"{c:<9} {nova[c].iloc[0]:>16.4f} {float(centroide[c]):>12.4f}")
-
-
-if __name__ == "__main__":
-    main()
+print('\nCentróide do cluster (desnormalizado):')
+print(centroide_desnormalizado.T.rename(columns={0: 'centróide'}).round(4))

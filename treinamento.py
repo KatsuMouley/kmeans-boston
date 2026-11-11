@@ -1,102 +1,90 @@
-"""
-Módulo de treinamento — Clusterização K-Means da base Boston Housing.
+#Módulo de treinamento - Clusterização da base Boston Housing com KMeans
+import math
+from pickle import dump
 
-Etapas:
-1. Carrega a base.
-2. Normaliza: dados quantitativos com MinMaxScaler; dados categóricos
-   (CHAS e RAD) com One-Hot Encoding.
-3. Determina o número ótimo de grupos pelo método do cotovelo
-   (maior distância de cada ponto da curva de inércia à reta
-   que liga o primeiro e o último ponto).
-4. Treina o K-Means com o k ótimo e salva o modelo.
-"""
-import joblib
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
+from scipy.spatial.distance import cdist
+from sklearn import preprocessing
 from sklearn.cluster import KMeans
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
-ARQ_DADOS = "data/BostonHousing.csv"
-ARQ_MODELO = "modelo/modelo_kmeans.pkl"
-ARQ_COTOVELO = "modelo/cotovelo.png"
+dados = pd.read_csv('data/HousingData.csv', sep=',')
 
-# CHAS: variável binária (margeia o rio Charles ou não)
-# RAD: índice de acessibilidade a rodovias (classes discretas: 1–8 e 24)
-CATEGORICAS = ["chas", "rad"]
-# MEDV (valor mediano do imóvel) é o alvo original da base; fica fora da
-# clusterização porque uma nova residência não terá esse valor conhecido.
-EXCLUIR = ["medv"]
+#Tratar dados faltantes (NA)
+#Quantitativos: mediana | Categóricos: moda
+dados_cat_rotulos = ['CHAS', 'RAD']  #CHAS: margeia o rio (0/1) | RAD: índice de acesso a rodovias
+for col in dados.columns:
+    if col in dados_cat_rotulos:
+        dados[col] = dados[col].fillna(dados[col].mode()[0])
+    else:
+        dados[col] = dados[col].fillna(dados[col].median())
+for col in dados_cat_rotulos:
+    dados[col] = dados[col].astype(int)
 
+#MEDV (preço) é o alvo original da base: fica fora da clusterização,
+#pois uma nova residência não terá esse valor
+dados = dados.drop(columns=['MEDV'])
 
-def carregar_dados():
-    df = pd.read_csv(ARQ_DADOS)
-    df.columns = df.columns.str.lower()
-    for c in CATEGORICAS:
-        df[c] = df[c].astype(int)
-    return df
+#Separar dados numéricos e categóricos
+dados_num = dados.drop(columns=dados_cat_rotulos)
+dados_cat = dados[dados_cat_rotulos]
 
+#NORMALIZAR DADOS NUMÉRICOS
+normalizador = preprocessing.MinMaxScaler()
+modelo_normalizador = normalizador.fit(dados_num)
+dump(modelo_normalizador, open('modelo/normalizador.model', 'wb'))
+dados_num_normalizados = pd.DataFrame(modelo_normalizador.transform(dados_num), columns=dados_num.columns)
 
-def criar_normalizador(quantitativas):
-    return ColumnTransformer([
-        ("quant", MinMaxScaler(), quantitativas),
-        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CATEGORICAS),
-    ])
+#NORMALIZAR DADOS CATEGÓRICOS
+dados_cat_normalizados = pd.get_dummies(dados_cat.astype(str), prefix=dados_cat_rotulos, dtype=int)
 
+#Juntar os dados normalizados
+dados_normalizados = dados_num_normalizados.join(dados_cat_normalizados)
+#Salvar a ordem das colunas para a inferência
+dump(list(dados_normalizados.columns), open('modelo/colunas.model', 'wb'))
 
-def k_otimo_cotovelo(inercias, ks):
-    """Ponto da curva mais distante da reta entre o primeiro e o último ponto.
-    Os eixos são escalados para [0, 1] para que k e inércia tenham o mesmo peso."""
-    x = (np.array(ks) - ks[0]) / (ks[-1] - ks[0])
-    y = (np.array(inercias) - min(inercias)) / (max(inercias) - min(inercias))
-    x1, y1, x2, y2 = x[0], y[0], x[-1], y[-1]
-    distancias = np.abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / np.hypot(x2 - x1, y2 - y1)
-    return ks[int(np.argmax(distancias))], list(distancias)
+#Descobrir o número ideal de clusters - distorções (distâncias)
+distorcoes = []
+K = range(1, 21)
+for i in K:
+    cluster_model = KMeans(n_clusters=i, random_state=42, n_init=10).fit(dados_normalizados)
+    distorcoes.append(
+        sum(
+            np.min(
+                cdist(dados_normalizados, cluster_model.cluster_centers_, 'euclidean'),
+                axis=1) / dados_normalizados.shape[0]
+        )
+    )
 
+#MÉTODO DO COTOVELO (ELBOW)
+x0 = K[0]
+y0 = distorcoes[0]
+xn = K[-1]
+yn = distorcoes[-1]
+distancias = []
+for i in range(len(distorcoes)):
+    x = K[i]
+    y = distorcoes[i]
+    numerador = abs((yn - y0) * x - (xn - x0) * y + xn * y0 - yn * x0)
+    denominador = math.sqrt((yn - y0) ** 2 + (xn - x0) ** 2)
+    distancias.append(numerador / denominador)
 
-def main():
-    df = carregar_dados()
-    quantitativas = [c for c in df.columns if c not in CATEGORICAS + EXCLUIR]
+n_clusters_otimo = K[distancias.index(max(distancias))]
+print(f'Número ótimo de clusters: {n_clusters_otimo}')
 
-    normalizador = criar_normalizador(quantitativas)
-    X = normalizador.fit_transform(df[quantitativas + CATEGORICAS])
+#Gráfico do cotovelo
+fig, ax = plt.subplots()
+ax.plot(K, distorcoes, 'o-')
+ax.axvline(n_clusters_otimo, color='red', linestyle=':', label=f'k ótimo = {n_clusters_otimo}')
+ax.set(xlabel='n Clusters', ylabel='Distorções', title='Método do cotovelo')
+ax.legend()
+ax.grid()
+plt.savefig('modelo/cotovelo.png', dpi=120, bbox_inches='tight')
 
-    # Método do cotovelo
-    ks = list(range(1, 11))
-    inercias = [KMeans(n_clusters=k, n_init=10, random_state=42).fit(X).inertia_ for k in ks]
-    k, distancias = k_otimo_cotovelo(inercias, ks)
+#Treinamento definitivo
+housing_cluster = KMeans(n_clusters=n_clusters_otimo, random_state=42, n_init=10).fit(dados_normalizados)
 
-    print("k  | inércia   | distância à reta")
-    for kk, i, d in zip(ks, inercias, distancias):
-        print(f"{kk:<2} | {i:9.2f} | {d:.2f}")
-    print(f"\nNúmero ótimo de grupos: {k}")
-
-    plt.plot(ks, inercias, "o-")
-    plt.plot([ks[0], ks[-1]], [inercias[0], inercias[-1]], "--", color="gray")
-    plt.axvline(k, color="red", linestyle=":", label=f"k ótimo = {k}")
-    plt.xlabel("Número de grupos (k)")
-    plt.ylabel("Inércia (soma das distâncias²)")
-    plt.title("Método do cotovelo")
-    plt.legend()
-    plt.savefig(ARQ_COTOVELO, dpi=120, bbox_inches="tight")
-
-    # Treino final e salvamento
-    modelo = KMeans(n_clusters=k, n_init=10, random_state=42).fit(X)
-    joblib.dump({
-        "normalizador": normalizador,
-        "kmeans": modelo,
-        "quantitativas": quantitativas,
-        "categoricas": CATEGORICAS,
-    }, ARQ_MODELO)
-
-    df["grupo"] = modelo.labels_
-    print("\nResidências por grupo:")
-    print(df["grupo"].value_counts().sort_index().to_string())
-    print(f"\nModelo salvo em {ARQ_MODELO}")
-
-
-if __name__ == "__main__":
-    main()
+#Salvar o modelo
+dump(housing_cluster, open('modelo/housing_cluster.model', 'wb'))
+print('Residências por cluster:', np.bincount(housing_cluster.labels_))
